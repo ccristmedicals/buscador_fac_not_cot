@@ -7,4 +7,7 @@ module.exports = (app) => {
     
     // Nueva ruta para auditoría por rango de fechas
     app.get('/api/audit/range', quotationController.getAuditByRange);
+
+    // Ruta para exportar a CSV (Excel compatible)
+    app.get('/api/audit/csv', quotationController.exportAuditToCSV);
 };

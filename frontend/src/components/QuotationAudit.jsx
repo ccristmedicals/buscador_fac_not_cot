@@ -18,6 +18,7 @@ const QuotationAudit = () => {
     const [loadingMore, setLoadingMore] = useState(false);
     const [error, setError] = useState('');
     const [currency, setCurrency] = useState('Bs');
+    const [isExporting, setIsExporting] = useState(false);
 
     // --- BÚSQUEDA ---
     const searchByDoc = async (targetDoc) => {
@@ -99,6 +100,33 @@ const QuotationAudit = () => {
             setError('Error al cargar más resultados');
         } finally {
             setLoadingMore(false);
+        }
+    };
+
+    const handleExportCSV = async () => {
+        if (isExporting) return;
+        setIsExporting(true);
+        setError('');
+        try {
+            const response = await fetch(`/api/audit/csv?start=${startDate}&end=${endDate}`);
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.error || 'Error al generar CSV');
+            }
+            
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `auditoria_precios_${startDate}_${endDate}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            setError('Error al descargar reporte: ' + err.message);
+        } finally {
+            setIsExporting(false);
         }
     };
 
@@ -201,7 +229,12 @@ const QuotationAudit = () => {
                 <div className="results-section animate-fade-in">
                     <div className="results-header-row">
                         <h2>Resultados <small>({rangeResults.length} de {pagination.total})</small></h2>
-                        <button className="clear-btn" onClick={() => setViewMode('search')}>Limpiar</button>
+                        <div className="header-actions">
+                            <button className="export-btn" onClick={handleExportCSV} disabled={isExporting}>
+                                {isExporting ? 'Generando...' : '📊 Exportar CSV (Excel)'}
+                            </button>
+                            <button className="clear-btn" onClick={() => setViewMode('search')}>Limpiar</button>
+                        </div>
                     </div>
                     <div className="summary-table-wrapper">
                         <table className="results-table summary-table">

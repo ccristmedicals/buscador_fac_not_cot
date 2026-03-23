@@ -1,4 +1,5 @@
 const { getConnection, sql } = require('../db/connection');
+const xlsx = require('xlsx');
 
 /**
  * Helper para obtener artículos con Precio Maestro (Deal)
@@ -97,39 +98,58 @@ exports.getAuditByRange = async (req, res) => {
 
         const pool = await getConnection();
 
-        // 1. Conteo Total (Rápido)
+        // 1. Conteo Total (Filtrado por discrepancias)
+        const countQuery = `
+            SELECT COUNT(*) as total 
+            FROM cotiz_c AS c WITH(NOLOCK)
+            JOIN clientes AS cl WITH(NOLOCK) ON c.co_cli = cl.co_cli
+            JOIN tipo_cli AS tc WITH(NOLOCK) ON cl.tipo = tc.tip_cli
+            WHERE c.fec_emis BETWEEN @start AND @end
+            AND EXISTS (
+                SELECT 1 FROM reng_cac r WITH(NOLOCK) 
+                JOIN art a WITH(NOLOCK) ON r.co_art = a.co_art
+                WHERE r.fact_num = c.fact_num 
+                  AND ABS(r.prec_vta - (CASE 
+                    WHEN tc.precio_a LIKE '%2%' THEN a.prec_vta2 
+                    WHEN tc.precio_a LIKE '%3%' THEN a.prec_vta3 
+                    WHEN tc.precio_a LIKE '%4%' THEN a.prec_vta4 
+                    ELSE a.prec_vta1 END * c.tasa)) > 0.06
+            )
+        `;
         const countRes = await pool.request()
             .input('start', sql.DateTime, start)
             .input('end', sql.DateTime, end)
-            .query(`SELECT COUNT(*) as total FROM cotiz_c WITH(NOLOCK) WHERE fec_emis BETWEEN @start AND @end`);
+            .query(countQuery);
         
         const totalResults = countRes.recordset[0].total;
 
-        // 2. Consulta CTE (Audita solo los 50 en pantalla)
+        // 2. Consulta CTE (Audita y Filtra solo las discrepancias)
         const rangeQuery = `
             WITH PagedDocs AS (
                 SELECT 
-                    fact_num, fec_emis, co_cli, tot_neto, tasa
-                FROM cotiz_c WITH(NOLOCK)
-                WHERE fec_emis BETWEEN @start AND @end
-                ORDER BY fec_emis DESC
+                    c.fact_num, c.fec_emis, c.co_cli, c.tot_neto, c.tasa
+                FROM cotiz_c AS c WITH(NOLOCK)
+                JOIN clientes AS cl WITH(NOLOCK) ON c.co_cli = cl.co_cli
+                JOIN tipo_cli AS tc WITH(NOLOCK) ON cl.tipo = tc.tip_cli
+                WHERE c.fec_emis BETWEEN @start AND @end
+                AND EXISTS (
+                    SELECT 1 FROM reng_cac r WITH(NOLOCK) 
+                    JOIN art a WITH(NOLOCK) ON r.co_art = a.co_art
+                    WHERE r.fact_num = c.fact_num 
+                      AND ABS(r.prec_vta - (CASE 
+                        WHEN tc.precio_a LIKE '%2%' THEN a.prec_vta2 
+                        WHEN tc.precio_a LIKE '%3%' THEN a.prec_vta3 
+                        WHEN tc.precio_a LIKE '%4%' THEN a.prec_vta4 
+                        ELSE a.prec_vta1 END * c.tasa)) > 0.06
+                )
+                ORDER BY c.fec_emis DESC
                 OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
             )
             SELECT 
                 p.*, cl.cli_des,
                 rn.fact_num as note_num,
                 rf.fact_num as inv_num,
-                CASE WHEN EXISTS (
-                    SELECT 1 FROM reng_cac r WITH(NOLOCK) 
-                    JOIN art a WITH(NOLOCK) ON r.co_art = a.co_art
-                    JOIN tipo_cli tc WITH(NOLOCK) ON cl.tipo = tc.tip_cli
-                    WHERE r.fact_num = p.fact_num 
-                      AND ABS(r.prec_vta - (CASE 
-                        WHEN tc.precio_a LIKE '%2%' THEN a.prec_vta2 
-                        WHEN tc.precio_a LIKE '%3%' THEN a.prec_vta3 
-                        WHEN tc.precio_a LIKE '%4%' THEN a.prec_vta4 
-                        ELSE a.prec_vta1 END * p.tasa)) > 0.06
-                ) THEN 1 ELSE 0 END as errQ
+                1 as errQ -- Todos los resultados filtrados tienen discrepancia
             FROM PagedDocs AS p
             LEFT JOIN clientes AS cl WITH(NOLOCK) ON p.co_cli = cl.co_cli
             OUTER APPLY (
@@ -154,5 +174,80 @@ exports.getAuditByRange = async (req, res) => {
     } catch (error) {
         console.error("Error en Auditoría Síncrona:", error);
         res.status(500).json({ error: "Error al consultar auditoría", details: error.message });
+    }
+};
+
+/**
+ * Exportar Auditoría a CSV (Extremadamente Rápido, Abierto en Excel)
+ */
+exports.exportAuditToCSV = async (req, res) => {
+    try {
+        const { start, end } = req.query;
+        if (!start || !end) return res.status(400).json({ error: "Fechas requeridas (start, end)" });
+
+        const pool = await getConnection();
+        
+        const exportQuery = `
+            SELECT 
+                c.fact_num, c.fec_emis, cl.cli_des,
+                MAX(rn.fact_num) as note_num,
+                MAX(rf.fact_num) as inv_num
+            FROM reng_cac r WITH(NOLOCK)
+            JOIN art a WITH(NOLOCK) ON r.co_art = a.co_art
+            JOIN cotiz_c c WITH(NOLOCK) ON r.fact_num = c.fact_num
+            JOIN clientes cl WITH(NOLOCK) ON c.co_cli = cl.co_cli
+            JOIN tipo_cli tc WITH(NOLOCK) ON cl.tipo = tc.tip_cli
+            LEFT JOIN reng_nde rn WITH(NOLOCK) ON rn.num_doc = c.fact_num AND rn.tipo_doc = 'T'
+            LEFT JOIN reng_fac rf WITH(NOLOCK) ON rf.num_doc = rn.fact_num
+            WHERE c.fec_emis BETWEEN @start AND @end
+            AND ABS(r.prec_vta - (CASE 
+                WHEN tc.precio_a LIKE '%2%' THEN a.prec_vta2 
+                WHEN tc.precio_a LIKE '%3%' THEN a.prec_vta3 
+                WHEN tc.precio_a LIKE '%4%' THEN a.prec_vta4 
+                ELSE a.prec_vta1 END * c.tasa)) > 0.06
+            GROUP BY c.fact_num, c.fec_emis, cl.cli_des
+            ORDER BY c.fec_emis DESC
+        `;
+
+        const request = pool.request();
+        // Aumentar timeout para exportaciones masivas
+        request.requestTimeout = 120000; 
+
+        const result = await request
+            .input('start', sql.DateTime, start)
+            .input('end', sql.DateTime, end)
+            .query(exportQuery);
+
+        // Cabeceras CSV
+        const headers = ["Cotización", "Fecha", "Cliente", "Nota Entrega", "Factura"];
+        
+        // Generar contenido CSV (Uso de ";" para compatibilidad Excel en español)
+        let csvContent = headers.join(";") + "\r\n";
+        
+        result.recordset.forEach(r => {
+            const row = [
+                r.fact_num ? String(r.fact_num).trim() : '',
+                new Date(r.fec_emis).toLocaleDateString('es-VE'),
+                r.cli_des ? `"${String(r.cli_des).trim().replace(/"/g, '""')}"` : '',
+                r.note_num ? String(r.note_num).trim() : 'N/A',
+                r.inv_num ? String(r.inv_num).trim() : 'N/A'
+            ];
+            csvContent += row.join(";") + "\r\n";
+        });
+
+        // Añadir BOM (Byte Order Mark) para que Excel reconozca UTF-8 correctamente
+        const bom = Buffer.from('\uFEFF', 'utf8');
+        const bufferContent = Buffer.from(csvContent, 'utf8');
+        const buffer = Buffer.concat([bom, bufferContent]);
+
+        // Configurar Headers para descarga de CSV
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="discrepancias_${start}_a_${end}.csv"`);
+        
+        res.status(200).send(buffer);
+
+    } catch (error) {
+        console.error("Error al exportar CSV:", error);
+        res.status(500).json({ error: "Error al exportar CSV", details: error.message });
     }
 };
