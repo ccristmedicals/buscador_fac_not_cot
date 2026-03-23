@@ -34,7 +34,7 @@ exports.getInvoice = async (req, res) => {
                 LEFT JOIN 
                     reng_fac AS f WITH(NOLOCK) ON f.num_doc = n.fact_num AND n.tipo_doc = 'T'
                 WHERE 
-                    n.fact_num = @number
+                    n.fact_num = @number AND n.tipo_doc = 'T'
             `;
         } else if (type === 'cotizacion') {
             baseQuery = `
@@ -47,7 +47,7 @@ exports.getInvoice = async (req, res) => {
                 LEFT JOIN 
                     reng_fac AS f WITH(NOLOCK) ON f.num_doc = n.fact_num AND n.tipo_doc = 'T'
                 WHERE 
-                    n.num_doc = @number
+                    n.num_doc = @number AND n.tipo_doc = 'T'
             `;
         } else {
             return res.status(400).json({ error: "Tipo de documento inválido" });

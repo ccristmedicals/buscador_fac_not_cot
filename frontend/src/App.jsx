@@ -1,26 +1,32 @@
 import React, { useState } from 'react';
 import InvoiceQuery from './components/InvoiceQuery';
+import QuotationAudit from './components/QuotationAudit';
 import './App.css';
 
 const App = () => {
-    const [invoiceData, setInvoiceData] = useState(null);
-
-    const handleInvoiceData = (data) => {
-        setInvoiceData(data);
-    };
+    const [activeTab, setActiveTab] = useState('invoices');
 
     return (
-        <div className="container">
-            <h1>Consulta de Facturas</h1>
-            <InvoiceQuery onInvoiceData={handleInvoiceData} />
-            {invoiceData && (
-                <div className="invoice-details">
-                    <h2>Detalles de Factura</h2>
-                    <p><strong>Factura:</strong> {invoiceData.Factura}</p>
-                    <p><strong>Nota:</strong> {invoiceData.Nota}</p>
-                    <p><strong>Cotización:</strong> {invoiceData.Cotizacion}</p>
-                </div>
-            )}
+        <div className="app-wrapper">
+            <nav className="app-tabs">
+                <button
+                    className={`tab-btn ${activeTab === 'invoices' ? 'tab-active' : ''}`}
+                    onClick={() => setActiveTab('invoices')}
+                >
+                    📄 Consulta de Documentos
+                </button>
+                <button
+                    className={`tab-btn ${activeTab === 'audit-quotation' ? 'tab-active' : ''}`}
+                    onClick={() => setActiveTab('audit-quotation')}
+                >
+                    🔍 Auditoría de Precios
+                </button>
+            </nav>
+
+            <div className="tab-content">
+                {activeTab === 'invoices' && <InvoiceQuery />}
+                {activeTab === 'audit-quotation' && <QuotationAudit />}
+            </div>
         </div>
     );
 };
